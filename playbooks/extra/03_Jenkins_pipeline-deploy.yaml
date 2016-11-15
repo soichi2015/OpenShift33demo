@@ -1,0 +1,65 @@
+- hosts: masters
+  remote_user: root
+
+  vars:
+    template_dir : /root/Provisioning_OpenShift3.3_FastAdv/playbooks/template
+    working_dir : /root
+    app_proj : jenkins-pipeline
+    app_template: https://raw.githubusercontent.com/mamurai/openshift3mlbparks/master/mlbparks-pipeline-template-eap.json
+    common_passwd : redhat1!
+    jenkins_proj : "{{ app_proj }}"
+    jenkins_passwd : r3dh4t1!
+    jenkins_pv_name : jenkins-volume
+    jenkins_pv_path : /srv/nfs/jenkins
+    jenkins_pv_host : oselab.example.com
+
+  tasks:
+
+  - name: Login Admin
+    shell: oc login -u system:admin
+
+  - name: Create Jenkins Project
+    shell: oc new-project {{ jenkins_proj }} --description "Jenkins Pileline Project"
+
+  - name: Add role to jenkins SA
+    shell: oc policy add-role-to-user admin system:serviceaccount:{{ jenkins_proj }}:jenkins -n {{ jenkins_proj }}
+
+  - name: Check Jenkins Persistence Volume existed
+    shell: oc get pv -o name | grep {{ jenkins_pv_name }}
+    register: jenkins_pv_exist
+    failed_when: jenkins_pv_exist.rc not in [0, 1]
+
+  - name: Create Jenkins PV template
+    template: src="{{ template_dir }}/jenkins/jenkins_pv.j2" dest="{{ working_dir }}/jenkins_pv.yaml"
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Create Jenkins Persistence Volume
+    shell: cat {{ working_dir }}/jenkins_pv.yaml | oc create -f -
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Deploy Jenkins 
+    shell: oc new-app jenkins-persistent -n {{ jenkins_proj }} -p JENKINS_PASSWORD={{ jenkins_passwd }}
+
+  - name: Wait until Jenkins Pod Running
+    shell: oc get pod | grep jenkins | egrep -v "build|deploy" | grep Running | grep "1/1"
+    register: result
+    until: result.rc == 0
+    retries: 60
+    delay: 30
+
+  - name: Create MLB Parks App Template
+    shell: oc create -f {{ app_template }}
+
+  - name: Create MLB Parks App
+    shell: oc new-app mlbparks-pipeline-eap
+
+  - name: Wait until mlbparks Pod Running
+    shell: oc get pod | grep mlbparks | egrep -v "mongodb|build|deploy" | grep Running | grep "1/1"
+    register: result
+    until: result.rc == 0
+    retries: 60
+    delay: 30
+
+  - name: Start Build pipeline
+    shell: oc start-build mlbparks-pipeline
+

@@ -1,0 +1,37 @@
+{
+    "kind": "BuildConfig",
+    "apiVersion": "v1",
+    "metadata": {
+        "name": "{{ pipeline_name }}",
+        "namespace": "{{ jenkins_proj }}",
+        "creationTimestamp": null,
+        "labels": {
+            "name": "{{ pipeline_name }}"
+        },
+        "annotations": {
+            "pipeline.alpha.openshift.io/uses": "[{\"name\": \"{{ app_name }}\", \"namespace\": \"{{ jenkins_proj }}\", \"kind\": \"DeploymentConfig\"}]"
+        }
+    },
+    "spec": {
+        "triggers": [
+            {
+                "type": "GitHub",
+                "github": {
+                    "secret": "secret101"
+                }
+            },
+            {
+                "type": "Generic",
+                "generic": {
+                    "secret": "secret101"
+                }
+            }
+        ],
+        "strategy": {
+            "type": "JenkinsPipeline",
+            "jenkinsPipelineStrategy": {
+                "jenkinsfile": "node {\r\tstage 'Build dev'\r\topenshiftBuild apiURL: '', authToken: '', bldCfg: 'webapp', buildName: '', checkForTriggeredDeployments: 'false', commitID: '', namespace: 'dev-pj', showBuildLogs: 'false', verbose: 'false', waitTime: ''\r\r\tstage 'Deploy dev'\r\topenshiftDeploy apiURL: '', authToken: '', depCfg: 'webapp', namespace: 'dev-pj', verbose: 'false', waitTime: ''\r\r\tstage 'Verify Deployment dev'\r\topenshiftVerifyDeployment apiURL: '', authToken: '', depCfg: 'webapp', namespace: 'dev-pj', replicaCount: '1', verbose: 'false', verifyReplicaCount: 'false', waitTime: ''\r\r\tstage 'Verify Service dev'\r\topenshiftVerifyService apiURL: '', authToken: '', namespace: 'dev-pj', svcName: 'webapp', verbose: 'false'\r\r\tstage 'Tag Add TestingCandidate'\r\topenshiftTag alias: 'false', apiURL: '', authToken: '', destStream: 'webapp', destTag: 'TestingCandidate', destinationAuthToken: '', destinationNamespace: 'dev-pj', namespace: 'dev-pj', srcStream: 'webapp', srcTag: 'latest', verbose: 'false'\r\r\tstage 'Deploy-test'\r\topenshiftDeploy apiURL: '', authToken: '', depCfg: 'webapp', namespace: 'test-pj', verbose: 'false', waitTime: ''\r\r\tstage 'Verify Deployment test'\r\topenshiftVerifyDeployment apiURL: '', authToken: '', depCfg: 'webapp', namespace: 'test-pj', replicaCount: '', verifyReplicaCount: 'false', waitTime: ''\r\r\tstage 'Verify Service test'\r\topenshiftVerifyService apiURL: '', authToken: '', namespace: 'test-pj', svcName: 'webapp', verbose: 'false'\r\r\tstage 'Tag Add ProdReady'\r\topenshiftTag alias: 'false', apiURL: '', authToken: '', destStream: 'webapp', destTag: 'ProdReady', destinationAuthToken: '', destinationNamespace: 'dev-pj', namespace: 'dev-pj', srcStream: 'webapp', srcTag: 'TestingCandidate', verbose: 'false'\r\r}"
+            }
+        }
+    }
+}

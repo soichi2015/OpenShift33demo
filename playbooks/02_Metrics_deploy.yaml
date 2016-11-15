@@ -1,0 +1,60 @@
+- hosts: masters
+  remote_user: root
+
+  vars:
+    master_config : /etc/origin/master/master-config.yaml
+    template_dir : /root/Provisioning_OpenShift3.3_FastAdv/playbooks/template
+    working_dir : /root
+    metrics_proj : openshift-infra
+    metrics_pv_name : metrics-volume
+    metrics_pv_path : /srv/nfs/metrics
+    metrics_pv_host : oselab.example.com
+    metrics_hostname : metrics.cloudapps-{{ lookup('env','GUID') }}.oslab.opentlc.com 
+
+  tasks:
+  - name: Add metricsPublicURL to master-config.yaml File
+    lineinfile:
+      "dest={{ master_config }}
+      insertafter='publicURL: https://master1-{{ lookup('env','GUID') }}.oslab.opentlc.com:8443/console/'
+      line='  metricsPublicURL: https://{{ metrics_hostname }}/hawkular/metrics'"
+
+  - name : OpenShift Master Service Restart
+    service: name=atomic-openshift-master.service state=restarted
+
+  - name: Login Admin
+    shell: oc login -u system:admin
+
+  - name: Select {{ metrics_proj }} Project
+    shell: oc project {{ metrics_proj }}
+
+  - name: Set NodeSelector to openshift-infra Proj
+    shell: oc annotate namespace openshift-infra openshift.io/node-selector='env=infra' --overwrite
+
+  - name: Create metrics-deployer ServiceAccount
+    shell: oc create serviceaccount metrics-deployer
+
+  - name: Add Edit Role to metrics-deployer 
+    shell: oadm policy add-role-to-user edit system:serviceaccount:openshift-infra:metrics-deployer
+
+  - name: Add cluster-reader Role to heapster
+    shell: oadm policy add-cluster-role-to-user cluster-reader system:serviceaccount:openshift-infra:heapster
+
+  - name: Create metrics-deployer Dummy Secret
+    shell: oc secrets new metrics-deployer nothing=/dev/null
+
+  - name: Check Metrics Persistence Volume existed
+    shell: oc get pv -o name | grep {{ metrics_pv_name }}
+    register: metrics_pv_exist
+    failed_when: metrics_pv_exist.rc not in [0, 1]
+
+  - name: Create Metrics PV template
+    template: src="{{ template_dir }}/metrics/metrics_pv.j2" dest="{{ working_dir }}/metrics_pv.yaml"
+    when: metrics_pv_exist.rc == 1
+ 
+  - name: Create Metrics Persistence Volume
+    shell: cat {{ working_dir }}/metrics_pv.yaml | oc create -f -
+    when: metrics_pv_exist.rc == 1
+
+  - name: Deploy metrics-deployer
+    shell: oc process metrics-deployer-template -n openshift -v HAWKULAR_METRICS_HOSTNAME={{ metrics_hostname }},IMAGE_VERSION=v3.3,IMAGE_PREFIX=registry.access.redhat.com/openshift3/,USE_PERSISTENT_STORAGE=true,CASSANDRA_PV_SIZE=10Gi | oc create -f -
+

@@ -1,0 +1,138 @@
+- hosts: masters
+  remote_user: root
+
+  vars:
+    template_dir : /root/Provisioning_OpenShift3.3_FastAdv/playbooks/template
+    working_dir : /root
+    app_name: 'webapp'
+    app_view_source: https://github.com/mamurai/ruby-hello-world
+    db_name: 'database'
+    pipeline_name: 'webapp-pipeline'
+    projects :
+      - { proj: 'dev-pj',  db_user: 'devuser',  db_passwd: 'devpass',  db_name: 'devdb',  color: 'yellow' }
+      - { proj: 'test-pj', db_user: 'testuser', db_passwd: 'testpass', db_name: 'testdb', color: 'blue' }
+      - { proj: 'prod-pj', db_user: 'produser', db_passwd: 'prodpass', db_name: 'proddb', color: 'red' }
+    image_tags:
+      - { proj: 'test-pj', tag: 'TestingCandidate' }
+      - { proj: 'prod-pj', tag: 'ProdReady' }
+    jenkins_proj : jenkins-pipeline
+    jenkins_passwd : r3dh4t1!
+    jenkins_pv_name : jenkins-volume
+    jenkins_pv_path : /srv/nfs/jenkins
+    jenkins_pv_host : oselab.example.com
+    common_passwd : redhat1!
+
+  tasks:
+
+  - name: Login Admin
+    shell: oc login -u system:admin
+
+  - name: Check Exist Jenkins Project
+    shell: oc get project | grep {{ jenkins_proj }}
+    register: jenkins_proj_exist
+    failed_when: jenkins_proj_exist.rc not in [0, 1]
+
+  - name: Create Jenkins Project
+    shell: oc new-project {{ jenkins_proj }} --description "Jenkins Pileline Project"
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Move Jenkins Project
+    shell: oc project {{ jenkins_proj }}
+    when: jenkins_proj_exist.rc == 0
+
+  - name: Add role to jenkins SA
+    shell: oc policy add-role-to-user admin system:serviceaccount:{{ jenkins_proj }}:jenkins -n {{ jenkins_proj }}
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Check Jenkins Persistence Volume existed
+    shell: oc get pv -o name | grep {{ jenkins_pv_name }}
+    register: jenkins_pv_exist
+    failed_when: jenkins_pv_exist.rc not in [0, 1]
+
+  - name: Create Jenkins PV template
+    template: src="{{ template_dir }}/jenkins/jenkins_pv.j2" dest="{{ working_dir }}/jenkins_pv.yaml"
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Create Jenkins Persistence Volume
+    shell: cat {{ working_dir }}/jenkins_pv.yaml | oc create -f -
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Deploy Jenkins 
+    shell: oc new-app jenkins-persistent -n {{ jenkins_proj }} -p JENKINS_PASSWORD={{ jenkins_passwd }}
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Wait until Jenkins Pod Running
+    shell: oc get pod | grep jenkins | egrep -v "build|deploy" | grep Running | grep "1/1"
+    register: result
+    until: result.rc == 0
+    retries: 60
+    delay: 30
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Create App Projects
+    shell: oc new-project {{ item.proj }}
+    with_items: "{{ projects }}"
+
+  - name: Create Database Pods
+    shell: oc new-app --template=mysql-ephemeral --param=MYSQL_USER={{ item.db_user }},MYSQL_PASSWORD={{ item.db_passwd }},MYSQL_DATABASE={{ item.db_name }},DATABASE_SERVICE_NAME={{ db_name }} -n {{ item.proj }}
+    with_items: "{{ projects }}"
+
+  - name: Wait until Database Pod Running
+    shell: oc get pod -n {{ item.proj }}| grep {{ db_name }} | egrep -v "build|deploy" | grep Running | grep "1/1"
+    register: result
+    until: result.rc == 0
+    retries: 10
+    delay: 30
+    with_items: "{{ projects }}"
+
+  - name: Create view App {{ item.name }}
+    shell: oc new-app ruby~{{ app_view_source }} --name={{ app_name }} --env=MYSQL_USER={{ item.db_user }},MYSQL_PASSWORD={{ item.db_passwd }},MYSQL_DATABASE={{ item.db_name }},COLOR={{ item.color }} -n {{ item.proj }}
+    with_items: "{{ projects }}"
+
+  - name: Create Route
+    shell: oc expose service {{ app_name }} -n {{ item.proj }}
+    with_items: "{{ projects }}"
+
+  - name: Wait until dev-pj Container Image Created
+    shell: oc get is -n dev-pj | grep {{ app_name }} | grep latest
+    register: result
+    until: result.rc == 0
+    retries: 30
+    delay: 30
+
+  - name: Set ImageTag on dev-pj
+    shell: oc tag {{ app_name }}:latest {{app_name}}:{{ item.tag }} -n dev-pj
+    with_items: "{{ image_tags }}"
+
+  - name: Add image-puller role
+    shell: oc policy add-role-to-group system:image-puller system:serviceaccounts:{{ item.proj }} -n dev-pj
+    with_items: "{{ projects }}"
+
+  - name: Add edit role to jenkins SA
+    shell: oc policy add-role-to-user edit system:serviceaccount:{{ jenkins_proj }}:jenkins -n {{ item.proj }}
+    with_items: "{{ projects }}"
+
+
+  - name: Get Deployment Config
+    shell: oc get dc {{ app_name }} -n {{ item.proj }} -o yaml > {{ working_dir }}/{{ app_name }}_{{ item.proj }}_dc.yaml
+    with_items: "{{ image_tags }}"
+
+  - name: Modify Deployment Config Tag
+    shell: sed -i "s/      name{{ ':' }} {{ app_name }}{{ ':' }}latest/      name{{ ':' }} {{ app_name }}{{ ':' }}{{  item.tag }}/g" {{ working_dir }}/{{ app_name }}_{{ item.proj }}_dc.yaml
+    with_items: "{{ image_tags }}"
+
+
+  - name: Modify Deployment Config project
+    shell: sed -i "s/      namespace{{ ':' }} {{ item.proj }}/      namespace{{ ':' }} dev-pj/g" {{ working_dir }}/{{ app_name }}_{{ item.proj }}_dc.yaml
+    with_items: "{{ image_tags }}"
+
+  - name: Reprace Deployment Config
+    shell: oc replace -f {{ working_dir }}/{{ app_name }}_{{ item.proj }}_dc.yaml -n {{ item.proj }}
+    with_items: "{{ image_tags }}"
+
+  - name: Create Pipeline Template {{ pipeline-name }}
+    template: src="{{ template_dir }}/jenkins/pipeline_cicd.j2" dest="{{ working_dir }}/pipeline_cicd.yaml"
+
+  - name: Create Pipeline {{ pipeline-name }}
+    shell: cat {{ working_dir }}/pipeline_cicd.yaml | oc create -f -
+

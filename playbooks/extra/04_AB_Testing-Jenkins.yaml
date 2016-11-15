@@ -1,0 +1,104 @@
+- hosts: masters
+  remote_user: root
+
+  vars:
+    template_dir : /root/Provisioning_OpenShift3.3_FastAdv/playbooks/template
+    working_dir : /root
+    app_proj : jenkins-pipeline
+    apps :
+      - { name: 'view-a', color: 'red' }
+      - { name: 'view-b', color: 'blue' }
+    common_passwd : redhat1!
+    jenkins_proj : "{{ app_proj }}"
+    jenkins_passwd : r3dh4t1!
+    jenkins_pv_name : jenkins-volume
+    jenkins_pv_path : /srv/nfs/jenkins
+    jenkins_pv_host : oselab.example.com
+    db_user: devuser
+    db_passwd: devpass
+    db_name: devdb
+    app_view_source: https://github.com/mamurai/ruby-hello-world
+    route_prod: view-prod
+    route_test: view-test
+
+  tasks:
+
+  - name: Login Admin
+    shell: oc login -u system:admin
+
+  - name: Check Exist Jenkins Project
+    shell: oc get project | grep {{ jenkins_proj }}
+    register: jenkins_proj_exist
+    failed_when: jenkins_proj_exist.rc not in [0, 1]
+
+  - name: Create Jenkins Project
+    shell: oc new-project {{ jenkins_proj }} --description "Jenkins Pileline Project"
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Move Jenkins Project
+    shell: oc project {{ jenkins_proj }}
+    when: jenkins_proj_exist.rc == 0
+
+  - name: Add role to jenkins SA
+    shell: oc policy add-role-to-user admin system:serviceaccount:{{ jenkins_proj }}:jenkins -n {{ jenkins_proj }}
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Check Jenkins Persistence Volume existed
+    shell: oc get pv -o name | grep {{ jenkins_pv_name }}
+    register: jenkins_pv_exist
+    failed_when: jenkins_pv_exist.rc not in [0, 1]
+
+  - name: Create Jenkins PV template
+    template: src="{{ template_dir }}/jenkins/jenkins_pv.j2" dest="{{ working_dir }}/jenkins_pv.yaml"
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Create Jenkins Persistence Volume
+    shell: cat {{ working_dir }}/jenkins_pv.yaml | oc create -f -
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Deploy Jenkins 
+    shell: oc new-app jenkins-persistent -n {{ jenkins_proj }} -p JENKINS_PASSWORD={{ jenkins_passwd }}
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Wait until Jenkins Pod Running
+    shell: oc get pod | grep jenkins | egrep -v "build|deploy" | grep Running | grep "1/1"
+    register: result
+    until: result.rc == 0
+    retries: 60
+    delay: 30
+    when: jenkins_proj_exist.rc == 1
+
+  - name: Create Database Pod
+    shell: oc new-app --template=mysql-ephemeral --param=MYSQL_USER={{ db_user }},MYSQL_PASSWORD={{ db_passwd }},MYSQL_DATABASE={{ db_name }},DATABASE_SERVICE_NAME=database -n {{ jenkins_proj }}
+
+  - name: Wait until Database Pod Running
+    shell: oc get pod | grep database | egrep -v "build|deploy" | grep Running | grep "1/1"
+    register: result
+    until: result.rc == 0
+    retries: 10
+    delay: 30
+
+  - name: Create view App {{ item.name }}
+    shell: oc new-app ruby~{{ app_view_source }} --name={{ item.name }} --env=MYSQL_USER={{ db_user }},MYSQL_PASSWORD={{ db_passwd }},MYSQL_DATABASE={{ db_name }},COLOR={{ item.color }} -n {{ jenkins_proj }}
+    with_items: "{{ apps }}"
+
+
+  - name: Create Route {{ route_prod }}
+    shell: oc expose service view-a --name={{ route_prod }} -n jenkins-pipeline
+
+  - name: Create Route {{ route_test }}
+    shell: oc expose service view-b --name={{ route_test }} -n jenkins-pipeline
+
+  - name: Set AB Route for {{ route_prod }}
+    shell: oc set route-backends {{ route_prod }} view-a=100 view-b=0 -n jenkins-pipeline 
+
+  - name: Set AB Route for {{ route_test }}
+    shell: oc set route-backends {{ route_test }} view-a=0 view-b=100 -n jenkins-pipeline 
+
+  - name: Create Pipeline Template {{ item.name }}
+    template: src="{{ template_dir }}/jenkins/pipeline.j2" dest="{{ working_dir }}/pipeline_{{ item.name }}.yaml"
+    with_items: "{{ apps }}"
+
+  - name: Create Pipeline {{ item.name }}
+    shell: cat {{ working_dir }}/pipeline_{{ item.name }}.yaml | oc create -f -
+    with_items: "{{ apps }}"

@@ -1,0 +1,49 @@
+- hosts: masters
+  remote_user: root
+
+  vars:
+    master_config : /etc/origin/master/master-config.yaml
+    htpasswd : /etc/origin/master/htpasswd
+    admin_user : oscadm
+    admin_passwd : r3dh4t1!
+    common_passwd : redhat1!
+    users: 
+       - { name: "{{ admin_user }}" , passwd: "{{ admin_passwd }}" }
+       - { name: 'andrew', passwd: "{{ common_passwd }}" }
+       - { name: 'karla', passwd : "{{ common_passwd }}" }
+
+  tasks:
+  - name: install httpd-tools (htpasswd)
+    yum: name=httpd-tools state=latest
+
+  - name: Create HtPasswd File
+    file: path={{ htpasswd }} state=touch mode="u=rw,g=r,o=r"
+
+  - name: Create User
+    shell: htpasswd -b {{ htpasswd }} {{ item.name }} {{ item.passwd }}
+    with_items: "{{ users }}"
+
+  - name: Add cluster-admin to {{ admin_user }}
+    shell: "oadm policy add-cluster-role-to-user cluster-admin {{ admin_user }}"
+
+  - name: modify probider
+    lineinfile: 
+      "dest={{ master_config }}
+      regexp='DenyAllPasswordIdentityProvider'
+      line='      kind: HTPasswdPasswordIdentityProvider'"
+
+  - name: modify auth_type
+    lineinfile:
+      "dest={{ master_config }}
+      regexp='deny_all'
+      line='    name: htpasswd_auth'"
+
+  - name: Add HTPasswd File
+    lineinfile:
+      "dest={{ master_config }}
+      insertafter='HTPasswdPasswordIdentityProvider'
+      line='      file: {{ htpasswd }}'"
+
+  - name : OpenShift Master Service Restart
+    service: name=atomic-openshift-master.service state=restarted
+

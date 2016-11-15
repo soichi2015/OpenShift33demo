@@ -1,0 +1,57 @@
+- hosts: masters
+  remote_user: root
+
+  vars:
+    template_dir : /root/Provisioning_OpenShift3.3_FastAdv/playbooks/template
+    working_dir : /root
+    proj_owner : andrew
+    app_proj : mlbparks
+    app_template: https://raw.githubusercontent.com/mamurai/openshift3mlbparks/master/mlbparks-template-eap.json
+    common_passwd : redhat1!
+    jenkins_proj : sharedjenkins
+    jenkins_passwd : r3dh4t1!
+    jenkins_pv_name : jenkins-volume
+    jenkins_pv_path : /srv/nfs/jenkins
+    jenkins_pv_host : oselab.example.com
+
+  tasks:
+  - name: Login Nomal User	
+    shell: echo '{{ common_passwd }}' | oc login -u {{ proj_owner }}
+
+  - name: Create New Project
+    shell: oc new-project {{ app_proj }}
+
+  - name: Create MLB Parks App Template
+    shell: oc create -f {{ app_template }}
+
+  - name: Create MLB Parks App
+    shell: oc new-app mlbparks-eap
+
+  - name: Login Admin
+    shell: oc login -u system:admin
+
+  - name: Create Jenkins Project
+    shell: oc new-project {{ jenkins_proj }} --description "Jenkins Project"
+
+  - name: Add role to jenkins edit {{ app_proj }}
+    shell: oc policy add-role-to-user edit system:serviceaccount:{{ jenkins_proj }}:jenkins -n  {{ app_proj }}
+
+  - name: Add role to jenkins SA
+    shell: oc policy add-role-to-user admin system:serviceaccount:{{ jenkins_proj }}:jenkins -n {{ jenkins_proj }}
+
+  - name: Check Jenkins Persistence Volume existed
+    shell: oc get pv -o name | grep {{ jenkins_pv_name }}
+    register: jenkins_pv_exist
+    failed_when: jenkins_pv_exist.rc not in [0, 1]
+
+  - name: Create Jenkins PV template
+    template: src="{{ template_dir }}/jenkins/jenkins_pv.j2" dest="{{ working_dir }}/jenkins_pv.yaml"
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Create Jenkins Persistence Volume
+    shell: cat {{ working_dir }}/jenkins_pv.yaml | oc create -f -
+    when: jenkins_pv_exist.rc == 1
+ 
+  - name: Deploy Jenkins 
+    shell: oc new-app jenkins-persistent -n {{ jenkins_proj }} -p JENKINS_PASSWORD={{ jenkins_passwd }}
+

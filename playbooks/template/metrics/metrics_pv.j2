@@ -1,0 +1,17 @@
+{
+  "apiVersion": "v1",
+  "kind": "PersistentVolume",
+  "metadata": {
+    "name": "{{ metrics_pv_name }}"
+  },
+  "spec": {
+    "capacity": {
+        "storage": "10Gi"
+        },
+    "accessModes": [ "ReadWriteOnce","ReadWriteMany" ],
+    "nfs": {
+        "path": "{{ metrics_pv_path }}",
+        "server": "{{ metrics_pv_host }}"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "kind": "BuildConfig",
+  "apiVersion": "v1",
+  "metadata": {
+    "name": "{{ item.name }}-pipeline",
+    "creationTimestamp": null,
+    "labels": {
+      "name": "{{ item.name }}-pipeline"
+    },
+    "annotations": {
+      "pipeline.alpha.openshift.io/uses": "[{\"name\": \"{{ item.name }}\", \"namespace\": \"{{ jenkins_proj }}\", \"kind\": \"DeploymentConfig\"}]"
+    }
+  },
+  "spec": {
+    "triggers": [
+      {
+        "type": "GitHub",
+        "github": {
+          "secret": "secret101"
+        }
+      },
+      {
+        "type": "Generic",
+        "generic": {
+          "secret": "secret101"
+        }
+      }
+    ],
+    "strategy": {
+      "type": "JenkinsPipeline",
+      "jenkinsPipelineStrategy": {
+    "jenkinsfile": "node {\n  stage 'Build-App'\n  openshiftBuild apiURL: '', authToken: '', bldCfg: '{{ item.name }}', buildName: '', checkForTriggeredDeployments: 'false', commitID: '', namespace: '{{ jenkins_proj }}', showBuildLogs: 'false', verbose: 'false', waitTime: '1800000'\n stage 'Deploy-App'\n  openshiftDeploy apiURL: '', authToken: '', depCfg: '{{ item.name }}', namespace: '{{ jenkins_proj }}', verbose: 'false', waitTime: '1800000'\n}"
+      }
+    }
+  }
+}
