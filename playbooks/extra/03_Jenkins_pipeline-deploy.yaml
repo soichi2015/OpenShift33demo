@@ -2,7 +2,7 @@
   remote_user: root
 
   vars:
-    template_dir : /root/Provisioning_OpenShift3.3_FastAdv/playbooks/template
+    template_dir : /root/OpenShift33demo/playbooks/template
     working_dir : /root
     app_proj : jenkins-pipeline
     app_template: https://raw.githubusercontent.com/mamurai/openshift3mlbparks/master/mlbparks-pipeline-template-eap.json
